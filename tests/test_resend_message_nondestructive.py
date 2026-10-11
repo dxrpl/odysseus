@@ -8,7 +8,7 @@ of appending a duplicate user turn. Append-only resend must be explicit.
 from pathlib import Path
 from types import SimpleNamespace
 
-from routes.history.history_routes import _keep_count_before_message
+from routes.history.history_routes import _keep_count_before_message, _keep_count_through_message
 from tests.helpers.stylesheets import app_css
 
 
@@ -29,6 +29,19 @@ def _regenerate_body() -> str:
     start = src.index("export async function regenerateFrom(")
     end = src.index("export async function deleteMessage(", start)
     return src[start:end]
+
+
+def _edit_body() -> str:
+    src = _CHAT_JS.read_text(encoding="utf-8")
+    start = src.index("export async function editUserMessage(")
+    end = src.index("export async function resendUserMessage(", start)
+    return src[start:end]
+
+
+def _fork_body() -> str:
+    src = _CHAT_JS.read_text(encoding="utf-8")
+    start = src.index("export async function forkFrom(")
+    return src[start:start + 2000]
 
 
 def test_resend_message_replaces_by_default():
@@ -98,3 +111,36 @@ def test_truncate_can_resolve_keep_count_from_db_message_id():
     assert _keep_count_before_message(rows, "clicked-user") == 1
     assert _keep_count_before_message(rows, "missing") is None
     assert _keep_count_before_message(rows, "") is None
+
+
+def test_edit_and_regenerate_truncate_by_db_message_id():
+    # #6657: a long chat renders only its newest messages, so the clicked
+    # bubble's DOM index is smaller than its stored position. Sending it as
+    # keep_count deleted real messages above the one clicked.
+    for body in (_edit_body(), _regenerate_body()):
+        assert ".dataset.dbId || '';" in body
+        assert "beforeMsgId ? { before_msg_id: beforeMsgId } : { keep_count: keepCount }" in body
+        assert "body: JSON.stringify(truncateBody)" in body
+        assert "if (!truncateRes.ok)" in body
+        assert "JSON.stringify({ keep_count: keepCount })" not in body
+
+
+def test_fork_from_page_sends_db_message_id():
+    body = _fork_body()
+
+    assert "const throughMsgId = aiMsgElement.dataset.dbId || '';" in body
+    assert "throughMsgId ? { through_msg_id: throughMsgId } : { keep_count: keepCount }" in body
+    assert "body: JSON.stringify(forkBody)" in body
+
+
+def test_fork_can_resolve_keep_count_through_db_message_id():
+    history = [
+        SimpleNamespace(metadata={"_db_id": "first"}),
+        SimpleNamespace(metadata=None),
+        SimpleNamespace(metadata={"_db_id": "clicked-ai"}),
+        SimpleNamespace(metadata={"_db_id": "later"}),
+    ]
+
+    assert _keep_count_through_message(history, "clicked-ai") == 3
+    assert _keep_count_through_message(history, "missing") is None
+    assert _keep_count_through_message(history, "") is None

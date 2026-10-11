@@ -7007,13 +7007,18 @@ import { invalidateSettings } from './appConfig.js';
       const sessionId = sessionModule.getCurrentSessionId();
       if (!sessionId) return;
 
+      // A long chat renders only its newest messages, so msgIndex is not a
+      // position in the stored history; prefer the DB id (#6657).
       const keepCount = msgIndex;
+      const beforeMsgId = userMsgElement.dataset.dbId || '';
+      const truncateBody = beforeMsgId ? { before_msg_id: beforeMsgId } : { keep_count: keepCount };
       try {
-        await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+        const truncateRes = await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ keep_count: keepCount })
+          body: JSON.stringify(truncateBody)
         });
+        if (!truncateRes.ok) throw new Error('Server error ' + truncateRes.status);
 
         // Remove DOM elements from msgIndex onward
         for (let i = allMsgs.length - 1; i >= msgIndex; i--) {
@@ -7215,14 +7220,19 @@ import { invalidateSettings } from './appConfig.js';
       variants.push({ raw: oldRaw, html: oldHtml, label: 'original' });
     }
 
+    // A long chat renders only its newest messages, so userIndex is not a
+    // position in the stored history; prefer the DB id (#6657).
     const keepCount = userIndex;
+    const beforeMsgId = userMsgEl.dataset.dbId || '';
+    const truncateBody = beforeMsgId ? { before_msg_id: beforeMsgId } : { keep_count: keepCount };
 
     try {
-      await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
+      const truncateRes = await fetch(`${API_BASE}/api/session/${sessionId}/truncate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keep_count: keepCount })
+        body: JSON.stringify(truncateBody)
       });
+      if (!truncateRes.ok) throw new Error('Server error ' + truncateRes.status);
 
       // Keep the original user bubble, but remove every rendered trace after
       // it, including agent-thread tool history between the user and AI bubble.
@@ -7395,13 +7405,16 @@ import { invalidateSettings } from './appConfig.js';
     const sessionId = sessionModule.getCurrentSessionId();
     if (!sessionId) return;
 
+    // Same as truncate: the DOM index is relative to the loaded slice (#6657).
     const keepCount = aiIndex + 1;
+    const throughMsgId = aiMsgElement.dataset.dbId || '';
+    const forkBody = throughMsgId ? { through_msg_id: throughMsgId } : { keep_count: keepCount };
 
     try {
       const res = await fetch(`${API_BASE}/api/session/${sessionId}/fork`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keep_count: keepCount }),
+        body: JSON.stringify(forkBody),
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();

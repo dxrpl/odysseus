@@ -249,6 +249,18 @@ def _effort_mode(model: str, raw_effort: Any) -> str:
     return f"effort:{effort}" if effort else "off"
 
 
+def _keep_count_through_message(history, through_msg_id: str | None) -> int | None:
+    """Return the in-memory history keep count up to and including a DB message id."""
+    wanted = str(through_msg_id or "").strip()
+    if not wanted:
+        return None
+    for pos, msg in enumerate(history):
+        meta = getattr(msg, "metadata", None)
+        if isinstance(meta, dict) and str(meta.get("_db_id", "")) == wanted:
+            return pos + 1
+    return None
+
+
 def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
     router = APIRouter(
         tags=["history"],
@@ -809,6 +821,15 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
                 raise HTTPException(404, "Session not found")
             if not source:
                 raise HTTPException(404, "Session not found")
+
+            # The chat page sends the clicked message's DB id: a long chat
+            # renders only its newest messages, so a DOM index is not a
+            # position in the stored history (#6657).
+            through_msg_id = str(body.get("through_msg_id") or "").strip()
+            if through_msg_id:
+                keep_count = _keep_count_through_message(source.history, through_msg_id)
+                if keep_count is None:
+                    raise HTTPException(404, "Message not found")
 
             # Create new session
             new_id = str(uuid.uuid4())
