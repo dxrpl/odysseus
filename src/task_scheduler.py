@@ -1372,6 +1372,7 @@ class TaskScheduler:
     CHECKIN_MCP_PATTERNS = [
         {"detect": "list_emails",   "section": "Email",    "tool": "list_emails",
          "args": {"mailbox": "INBOX", "limit": 10, "unread_only": True},
+         "builtin_args": {"folder": "INBOX", "max_results": 10, "unread_only": True},
          "label_from_identity": True,
          "formatter": "_format_email_output"},
         {"detect": "search_emails", "section": "Email",    "tool": "search_emails",
@@ -1543,7 +1544,10 @@ class TaskScheduler:
         if mcp:
             discovered = set()
             for server_id, tools in mcp._tools.items():
-                if mcp.is_builtin(server_id):
+                # The built-in Email server is a check-in source; the other
+                # built-ins (memory, rag, image_gen, browser) are not (#6398).
+                builtin_email = server_id == "email"
+                if mcp.is_builtin(server_id) and not builtin_email:
                     continue
                 conn = mcp._connections.get(server_id, {})
                 if conn.get("status") != "connected":
@@ -1559,8 +1563,17 @@ class TaskScheduler:
                     discovered.add(key)
                     label = f"{pattern['section']} ({identity})" if identity else pattern["section"]
                     qualified = f"mcp__{server_id}__{pattern['tool']}"
-                    args = dict(pattern.get("args", {}))
-                    args["account"] = "default"
+                    if builtin_email:
+                        # Its own argument names, no selector (it matches
+                        # "default" against account names and finds none),
+                        # and the owner it needs for owner-scoped accounts.
+                        # The owner also keeps the cached snapshot per owner.
+                        args = dict(pattern.get("builtin_args", pattern.get("args", {})))
+                        if task.owner:
+                            args["_odysseus_owner"] = task.owner
+                    else:
+                        args = dict(pattern.get("args", {}))
+                        args["account"] = "default"
                     try:
                         # Cache 3 min: different scheduled tasks firing at the
                         # same minute share the same MCP snapshot.
@@ -1573,8 +1586,8 @@ class TaskScheduler:
                         content = result.get("stdout") or result.get("output") or ""
                         if content.strip():
                             raw[label] = content[:3000]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Check-in source %s failed: %s", qualified, e)
 
         # Build the data dump and hand it to the LLM
         data_dump = f"Current time: {time_str}\n\n"
