@@ -2261,6 +2261,10 @@ def setup_gallery_routes() -> APIRouter:
 
     # ---- AI auto-tag ----
 
+    # A thinking vision model spends most of its completion budget on reasoning
+    # before it writes the tag list, so leave room for both.
+    _AI_TAG_MAX_TOKENS = 4096
+
     @router.post("/api/gallery/{image_id}/ai-tag")
     async def ai_tag_image(request: Request, image_id: str):
         """Send image to vision model for auto-tagging."""
@@ -2310,7 +2314,7 @@ def setup_gallery_routes() -> APIRouter:
             if provider == "anthropic":
                 payload = {
                     "model": model_name,
-                    "max_tokens": 200,
+                    "max_tokens": _AI_TAG_MAX_TOKENS,
                     "messages": [{
                         "role": "user",
                         "content": [
@@ -2332,7 +2336,7 @@ def setup_gallery_routes() -> APIRouter:
                             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
                         ],
                     }],
-                    _tok_key: 200,
+                    _tok_key: _AI_TAG_MAX_TOKENS,
                     "temperature": 0.3,
                 }
                 # Reasoning models (o1/o3/o4/gpt-5) reject an explicit temperature.
@@ -2355,8 +2359,15 @@ def setup_gallery_routes() -> APIRouter:
                 else:
                     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-            # Clean up tags
+            # Clean up tags. A reasoning model may leave <think> text in content.
+            from src.text_helpers import strip_think
+            content = strip_think(content or "", prose=True, prompt_echo=True)
             tags = [t.strip().lower() for t in content.split(",") if t.strip()]
+            if not tags:
+                # Empty reply (e.g. the token budget went to reasoning): report
+                # it instead of saving "" and showing success.
+                logger.warning("ai_tag vision model returned no tags for %s", image_id)
+                return {"error": "Vision model returned no tags"}
             tag_str = ", ".join(tags[:30])
             img.ai_tags = tag_str
             db.commit()
